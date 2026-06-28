@@ -1,0 +1,38 @@
+name: economicnewsrussiabot
+
+on:
+  schedule:
+    # каждые 2 часа (UTC). GitHub Actions работает даже когда Mac выключен.
+    - cron: "0 */2 * * *"
+  workflow_dispatch: {}   # кнопка "Run workflow" для ручного запуска
+
+permissions:
+  contents: write          # чтобы коммитить обратно history.json (антидубль)
+
+concurrency:
+  group: post
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run bot
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+        run: python3 bot.py
+
+      - name: Commit updated history (anti-duplicate)
+        run: |
+          git config user.name  "economicnewsbot"
+          git config user.email "bot@users.noreply.github.com"
+          git add history.json
+          git diff --staged --quiet || git commit -m "history: update [skip ci]"
+          git push

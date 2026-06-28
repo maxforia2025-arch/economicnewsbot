@@ -1,0 +1,7 @@
+secret.json
+history.db
+run.log
+logo.svg.png
+__pycache__/
+*.pyc
+.DS_Store

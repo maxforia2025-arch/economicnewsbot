@@ -1,0 +1,37 @@
+{
+  "bot_token": "",
+  "channel_id": "@economicrussialetsgo",
+  "citation_threshold": 4,
+  "max_posts_per_run": 5,
+  "interval_hours": 2,
+  "google_news_queries": [
+    "экономика России",
+    "курс рубля",
+    "ключевая ставка ЦБ",
+    "инфляция в России",
+    "санкции экономика",
+    "нефть газ Россия бюджет"
+  ],
+  "outlet_rss_feeds": {
+    "Коммерсантъ": "https://www.kommersant.ru/RSS/section-economics.xml",
+    "Интерфакс": "https://www.interfax.ru/rss.asp",
+    "Forbes": "https://www.forbes.ru/newrss.xml",
+    "Ведомости": "https://www.vedomosti.ru/rss/rubric/economics.xml",
+    "Газета.Ru": "https://www.gazeta.ru/export/rss/business.xml",
+    "Финмаркет": "http://www.finmarket.ru/rss/mainnews.asp"
+  },
+  "telegram_channels": [
+    "rbc_news",
+    "tass_agency",
+    "interfaxonline",
+    "rian_ru",
+    "banksta",
+    "centralbank_russia"
+  ],
+  "keywords": [
+    "рубль", "ставка", "инфляц", "цб", "центробанк", "нефть", "газ",
+    "санкц", "ввп", "бюджет", "доллар", "евро", "экономик", "биржа",
+    "акци", "налог", "минфин", "ипотек", "кредит", "ozon", "сбер",
+    "газпром", "девальвац", "дефицит", "профицит", "экспорт", "импорт"
+  ]
+}
