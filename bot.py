@@ -150,7 +150,7 @@ def clean_desc(text):
     return text
 
 
-def trim_sentences(text, max_sentences=15, max_chars=750):
+def trim_sentences(text, max_sentences=22, max_chars=1125):
     """Оставляем до N предложений и не длиннее max_chars."""
     text = text.strip()
     parts = re.split(r"(?<=[.!?…])\s+", text)
@@ -287,7 +287,7 @@ def fallback_body(cluster):
             continue
         seen.append(nt)
         picks.append(it["title"].strip().rstrip(". "))
-        if len(picks) >= 3:
+        if len(picks) >= 5:
             break
     return ". ".join(picks)
 
