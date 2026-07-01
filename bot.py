@@ -412,10 +412,10 @@ def why_it_matters(text):
 
 def confidence_label(citation):
     if citation >= 10:
-        return "🔴 Горячее · подтверждено многими источниками"
+        return "🔴 Горячее"
     if citation >= 6:
-        return "🟠 Важное · хорошо подтверждено"
-    return "🟡 Новое · подтверждается"
+        return "🟠 Важное"
+    return "🟡 Новое"
 
 
 def build_post(cluster, compact=False):
@@ -455,7 +455,7 @@ def build_post(cluster, compact=False):
         lines += ["", f"💡 <b>Почему это важно:</b> {html.escape(why)}"]
     lines += [
         "",
-        f"{label} ({cluster['citation']} ист.)",
+        label,
         f'🔗 <a href="{html.escape(link)}">Источник</a>',
         "",
         " ".join(tags[:5]),
@@ -663,7 +663,7 @@ def _story_lines(top):
     out = []
     for i, c in enumerate(top, 1):
         t = html.unescape(c["best"]["title"]).strip().rstrip(".")
-        out.append(f"{i}. {html.escape(t)} <i>({c['citation']} ист.)</i>")
+        out.append(f"{i}. {html.escape(t)}")
     return out
 
 
