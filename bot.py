@@ -597,6 +597,21 @@ def send_telegram_photo(token, channel_id, photo_url, caption):
     return resp
 
 
+def seed_reaction(token, channel_id, message_id, emoji="👍"):
+    """Ставит стартовую реакцию на пост, чтобы полоска голосования была видна."""
+    url = f"https://api.telegram.org/bot{token}/setMessageReaction"
+    payload = urllib.parse.urlencode({
+        "chat_id": channel_id, "message_id": message_id,
+        "reaction": json.dumps([{"type": "emoji", "emoji": emoji}]),
+    }).encode()
+    req = urllib.request.Request(url, data=payload, headers={"User-Agent": UA})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        log(f"Реакция не поставлена: {e}")
+
+
 def send_telegram(token, channel_id, text):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = urllib.parse.urlencode({
@@ -661,9 +676,12 @@ def run_once(cfg, dry_run=False):
         else:
             try:
                 if chart:
-                    send_telegram_photo(cfg["bot_token"], cfg["channel_id"], chart, text)
+                    resp = send_telegram_photo(cfg["bot_token"], cfg["channel_id"], chart, text)
                 else:
-                    send_telegram(cfg["bot_token"], cfg["channel_id"], text)
+                    resp = send_telegram(cfg["bot_token"], cfg["channel_id"], text)
+                mid = resp.get("result", {}).get("message_id")
+                if mid:
+                    seed_reaction(cfg["bot_token"], cfg["channel_id"], mid)
                 log(f"Опубликовано (цит.={cl['citation']}"
                     f"{', +график' if chart else ''}): {cl['best']['title'][:60]}")
             except Exception as e:
