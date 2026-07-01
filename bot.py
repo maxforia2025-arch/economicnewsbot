@@ -28,7 +28,7 @@ import html
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
@@ -418,7 +418,7 @@ def confidence_label(citation):
     return "🟡 Новое · подтверждается"
 
 
-def build_post(cluster):
+def build_post(cluster, compact=False):
     best = cluster["best"]
     title = html.unescape(best["title"]).strip().rstrip(".")
     link = best["url"]
@@ -436,8 +436,11 @@ def build_post(cluster):
             tags.append(t)
     tags.append("#экономика")
 
-    # пояснение: лид-абзац статьи, до 15 предложений
-    body = trim_sentences(clean_desc(cluster.get("body", "")))
+    # пояснение: лид-абзац статьи (компактнее, если пост идёт подписью к фото — лимит 1024)
+    if compact:
+        body = trim_sentences(clean_desc(cluster.get("body", "")), max_sentences=7, max_chars=480)
+    else:
+        body = trim_sentences(clean_desc(cluster.get("body", "")))
     # не дублировать заголовок в теле
     if body and normalize(body[:120]) and jaccard(normalize(body), normalize(title)) > 0.7:
         body = ""
@@ -458,6 +461,84 @@ def build_post(cluster):
         " ".join(tags[:5]),
     ]
     return "\n".join(lines)
+
+
+def cbr_currency_series(val_code, days=30):
+    """Динамика курса валюты из официального API ЦБ РФ. [(dd.mm, value), ...]."""
+    end = datetime.now().date()
+    start = end - timedelta(days=days)
+    url = ("https://www.cbr.ru/scripts/XML_dynamic.asp"
+           f"?date_req1={start:%d/%m/%Y}&date_req2={end:%d/%m/%Y}&VAL_NM_RQ={val_code}")
+    raw = http_get(url)
+    raw = re.sub(r"^\s*<\?xml[^>]*\?>", "", raw)  # ET не любит decl в str
+    root = ET.fromstring(raw)
+    out = []
+    for rec in root.iter("Record"):
+        d = rec.get("Date", "")
+        v = (rec.findtext("Value") or "").replace(",", ".")
+        nom = (rec.findtext("Nominal") or "1").replace(",", ".")
+        try:
+            val = round(float(v) / float(nom), 2)
+        except ValueError:
+            continue
+        out.append((d[:5], val))  # dd.mm
+    return out
+
+
+def quickchart_url(labels, values, title, color="#22C55E"):
+    """URL картинки-графика через бесплатный QuickChart (Telegram сам её скачает)."""
+    cfg = {
+        "type": "line",
+        "data": {"labels": labels, "datasets": [{
+            "label": title, "data": values, "borderColor": color,
+            "backgroundColor": color, "fill": False, "borderWidth": 2,
+            "pointRadius": 0, "tension": 0.3}]},
+        "options": {
+            "title": {"display": True, "text": title, "fontSize": 15},
+            "legend": {"display": False},
+            "scales": {"xAxes": [{"ticks": {"maxTicksLimit": 6, "fontSize": 10}}],
+                       "yAxes": [{"ticks": {"fontSize": 10}}]}},
+    }
+    return ("https://quickchart.io/chart?w=520&h=300&bkg=white&c="
+            + urllib.parse.quote(json.dumps(cfg, ensure_ascii=False)))
+
+
+def chart_for(cluster):
+    """Если пост про курс валюты — вернуть URL мини-графика, иначе None."""
+    low = (cluster["best"]["title"] + " " + cluster.get("body", "")).lower()
+    is_rate = "курс" in low or "цб установил" in low or "официальный курс" in low
+    if not is_rate:
+        return None
+    if "евро" in low and "доллар" not in low:
+        code, title = "R01239", "Курс евро ЦБ РФ, 30 дней (₽)"
+    else:
+        code, title = "R01235", "Курс доллара ЦБ РФ, 30 дней (₽)"
+    try:
+        series = cbr_currency_series(code)
+        if len(series) < 5:
+            return None
+        labels = [d for d, _ in series]
+        values = [v for _, v in series]
+        return quickchart_url(labels, values, title)
+    except Exception as e:
+        log(f"chart_for: не удалось построить график ({e})")
+        return None
+
+
+def send_telegram_photo(token, channel_id, photo_url, caption):
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    payload = urllib.parse.urlencode({
+        "chat_id": channel_id,
+        "photo": photo_url,
+        "caption": caption,
+        "parse_mode": "HTML",
+    }).encode()
+    req = urllib.request.Request(url, data=payload, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        resp = json.loads(r.read().decode("utf-8"))
+    if not resp.get("ok"):
+        raise RuntimeError(resp)
+    return resp
 
 
 def send_telegram(token, channel_id, text):
@@ -506,15 +587,20 @@ def run_once(cfg, dry_run=False):
             continue
         if already_posted(history, cl["tokens"]):
             continue
-        text = build_post(cl)
+        chart = chart_for(cl)
+        text = build_post(cl, compact=bool(chart))
         if dry_run:
-            log(f"[DRY-RUN] цитируемость={cl['citation']} "
-                f"источники={cl['sources'][:6]}")
+            log(f"[DRY-RUN] цит={cl['citation']} график={'да' if chart else 'нет'} "
+                f"источники={cl['sources'][:5]}")
             print("-" * 60 + "\n" + text + "\n" + "-" * 60)
         else:
             try:
-                send_telegram(cfg["bot_token"], cfg["channel_id"], text)
-                log(f"Опубликовано (цит.={cl['citation']}): {cl['best']['title'][:70]}")
+                if chart:
+                    send_telegram_photo(cfg["bot_token"], cfg["channel_id"], chart, text)
+                else:
+                    send_telegram(cfg["bot_token"], cfg["channel_id"], text)
+                log(f"Опубликовано (цит.={cl['citation']}"
+                    f"{', +график' if chart else ''}): {cl['best']['title'][:60]}")
             except Exception as e:
                 log(f"Ошибка отправки: {e}")
                 continue
