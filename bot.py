@@ -468,7 +468,7 @@ def gemini_rewrite(cfg, cluster):
     prompt = (
         "Ты — экономический обозреватель Telegram-канала «Эвномия». На основе фактов "
         "ниже напиши небольшую аналитическую заметку на русском языке "
-        "(2–3 коротких абзаца, 6–10 предложений), своими словами.\n\n"
+        "(2 коротких абзаца, 5–8 предложений), своими словами, ёмко и без воды.\n\n"
         "Структура:\n"
         "1) Что произошло — по фактам источников.\n"
         "2) Контекст и причины — почему это происходит.\n"
@@ -490,7 +490,7 @@ def gemini_rewrite(cfg, cluster):
            f"{model}:generateContent?key={key}")
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.5, "maxOutputTokens": 1200,
+        "generationConfig": {"temperature": 0.5, "maxOutputTokens": 950,
                              "thinkingConfig": {"thinkingBudget": 0}},
     }).encode("utf-8")
     req = urllib.request.Request(url, data=body,
@@ -527,7 +527,7 @@ def build_post(cluster, compact=False):
     # тело: приоритет — оригинальная ИИ-заметка (с абзацами), иначе лид-абзац источника
     ai = cluster.get("ai_body")
     if ai:
-        body = cap_text(ai, max_chars=700 if compact else 2000)
+        body = cap_text(ai, max_chars=560 if compact else 1600)
     elif compact:
         body = trim_sentences(clean_desc(cluster.get("body", "")), max_sentences=7, max_chars=480)
     else:
