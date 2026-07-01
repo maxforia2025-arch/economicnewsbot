@@ -464,7 +464,8 @@ def gemini_rewrite(cfg, cluster):
            f"{model}:generateContent?key={key}")
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 500},
+        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 800,
+                             "thinkingConfig": {"thinkingBudget": 0}},
     }).encode("utf-8")
     req = urllib.request.Request(url, data=body,
                                  headers={"Content-Type": "application/json"})
