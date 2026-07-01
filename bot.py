@@ -422,7 +422,6 @@ def build_post(cluster, compact=False):
     best = cluster["best"]
     title = html.unescape(best["title"]).strip().rstrip(".")
     link = best["url"]
-    label = confidence_label(cluster["citation"])
 
     # хэштеги по ключевым темам
     tags = []
@@ -455,7 +454,6 @@ def build_post(cluster, compact=False):
         lines += ["", f"💡 <b>Почему это важно:</b> {html.escape(why)}"]
     lines += [
         "",
-        label,
         f'🔗 <a href="{html.escape(link)}">Источник</a>',
         "",
         " ".join(tags[:5]),
