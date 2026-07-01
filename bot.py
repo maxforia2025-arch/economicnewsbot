@@ -69,13 +69,16 @@ def load_config():
     # Секреты вне репозитория: env (GitHub Secrets) -> локальный secret.json -> config
     token = os.environ.get("BOT_TOKEN")
     channel = os.environ.get("CHANNEL_ID")
-    if (not token or not channel) and os.path.exists(SECRET_PATH):
+    gemini = os.environ.get("GEMINI_KEY")
+    if (not token or not channel or not gemini) and os.path.exists(SECRET_PATH):
         with open(SECRET_PATH, "r", encoding="utf-8") as f:
             sec = json.load(f)
         token = token or sec.get("bot_token")
         channel = channel or sec.get("channel_id")
+        gemini = gemini or sec.get("gemini_key")
     cfg["bot_token"] = token or cfg.get("bot_token", "")
     cfg["channel_id"] = channel or cfg.get("channel_id", "")
+    cfg["gemini_key"] = gemini or cfg.get("gemini_key", "")
     return cfg
 
 
@@ -421,6 +424,60 @@ def confidence_label(citation):
     return "🟡 Новое"
 
 
+GEMINI_MODEL = "gemini-2.0-flash"
+
+
+def gemini_rewrite(cfg, cluster):
+    """Оригинальный текст новости через Gemini на основе реальных фактов кластера.
+
+    Строго по фактам источников; при любой ошибке — пустая строка (откат).
+    """
+    key = cfg.get("gemini_key")
+    if not key:
+        return ""
+    title = html.unescape(cluster["best"]["title"]).strip()
+    # факты: разные заголовки + лид-абзац, если есть
+    seen, facts = [normalize(title)], []
+    for it in cluster["items"]:
+        nt = normalize(it["title"])
+        if nt and not any(jaccard(nt, s) > 0.6 for s in seen):
+            seen.append(nt)
+            facts.append("- " + it["title"].strip())
+        if len(facts) >= 6:
+            break
+    lead = clean_desc(cluster.get("body", ""))[:500]
+    prompt = (
+        "Ты — редактор Telegram-канала об экономике России. На основе фактов ниже "
+        "напиши короткую оригинальную новость на русском языке (3–5 предложений), "
+        "своими словами, нейтральным деловым тоном, понятную обычному читателю. "
+        "СТРОГО по фактам: не выдумывай цифры, даты, имена, события и цитаты, "
+        "которых нет в исходных данных. Без заголовка, без ссылок, без хэштегов, "
+        "без markdown — только текст новости.\n\n"
+        f"Тема: {title}\n"
+        "Сообщения источников:\n" + "\n".join(facts)
+    )
+    if lead:
+        prompt += f"\n\nПодробности: {lead}"
+
+    model = cfg.get("gemini_model", GEMINI_MODEL)
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{model}:generateContent?key={key}")
+    body = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 500},
+    }).encode("utf-8")
+    req = urllib.request.Request(url, data=body,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            resp = json.loads(r.read().decode("utf-8"))
+        text = resp["candidates"][0]["content"]["parts"][0]["text"].strip()
+        return re.sub(r"\s+\n", "\n", text)
+    except Exception as e:
+        log(f"Gemini: откат на пересказ ({e})")
+        return ""
+
+
 def build_post(cluster, compact=False):
     best = cluster["best"]
     title = html.unescape(best["title"]).strip().rstrip(".")
@@ -591,6 +648,9 @@ def run_once(cfg, dry_run=False):
             continue
         if already_posted(history, cl["tokens"]):
             continue
+        ai_body = gemini_rewrite(cfg, cl)
+        if ai_body:
+            cl["body"] = ai_body
         chart = chart_for(cl)
         text = build_post(cl, compact=bool(chart))
         if dry_run:
