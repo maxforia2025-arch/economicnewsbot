@@ -186,8 +186,9 @@ def fetch_gdelt(keywords):
         title = art.get("title", "").strip()
         u = art.get("url", "")
         if title and u and is_relevant(title, keywords):
+            dom = art.get("domain") or domain_of(u)
             items.append({"title": title, "url": u, "desc": "",
-                          "source": art.get("domain") or domain_of(u)})
+                          "source": dom, "source_name": dom})
     log(f"GDELT: {len(items)} релевантных статей")
     return items
 
@@ -208,7 +209,8 @@ def fetch_outlet_rss(feeds, keywords):
             desc = clean_desc(item.findtext("description") or "")
             if title and is_relevant(title + " " + desc, keywords):
                 items.append({"title": title, "url": link or url,
-                              "desc": desc, "source": source.lower()})
+                              "desc": desc, "source": source.lower(),
+                              "source_name": source})
                 cnt += 1
         log(f"RSS {source}: {cnt} релевантных")
     return items
@@ -240,7 +242,8 @@ def fetch_google_news(queries, keywords):
                 source = src_tag.text.strip()
             if title and link and is_relevant(title, keywords):
                 items.append({"title": title.strip(), "url": link, "desc": "",
-                              "source": (source or "googlenews").strip().lower()})
+                              "source": (source or "googlenews").strip().lower(),
+                              "source_name": (source or "").strip()})
     log(f"Google News: {len(items)} релевантных заголовков")
     return items
 
@@ -266,7 +269,7 @@ def fetch_telegram(channels, keywords):
             title = text[:200]
             if is_relevant(title, keywords):
                 items.append({"title": title, "url": url, "desc": text,
-                              "source": f"tg:{ch}"})
+                              "source": f"tg:{ch}", "source_name": "Telegram"})
     log(f"Telegram: {len(items)} релевантных сообщений из {len(channels)} каналов")
     return items
 
@@ -444,17 +447,14 @@ def build_post(cluster, compact=False):
     if body and normalize(body[:120]) and jaccard(normalize(body), normalize(title)) > 0.7:
         body = ""
 
-    # «Почему это важно» — объяснение влияния по теме новости
-    why = why_it_matters(title + " " + body)
+    src_name = best.get("source_name") or "Источник"
 
     lines = [f"📊 <b>{html.escape(title)}</b>"]
     if body:
         lines += ["", html.escape(body)]
-    if why:
-        lines += ["", f"💡 <b>Почему это важно:</b> {html.escape(why)}"]
     lines += [
         "",
-        f'🔗 <a href="{html.escape(link)}">Источник</a>',
+        f'🔗 <a href="{html.escape(link)}">{html.escape(src_name)}</a>',
         "",
         " ".join(tags[:5]),
     ]
