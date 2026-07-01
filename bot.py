@@ -342,6 +342,13 @@ def cluster_items(items, sim_threshold=0.32):
                         key=lambda i: (not i["source"].startswith("tg:"), len(i["title"])),
                         reverse=True)
         cl["best"] = ranked[0]
+        # URL для мини-превью: реальная статья издания (не редирект Google, не telegram)
+        cl["preview_url"] = ""
+        for it in cl["items"]:
+            u = it.get("url", "")
+            if u.startswith("http") and "news.google." not in u and "//t.me/" not in u:
+                cl["preview_url"] = u
+                break
         # пояснение = самый длинный лид-абзац среди источников кластера
         with_desc = [i for i in cl["items"] if i.get("desc")]
         cl["body"] = max(with_desc, key=lambda i: len(i["desc"]))["desc"] if with_desc else ""
@@ -636,13 +643,69 @@ def seed_reaction(token, channel_id, message_id, emoji="👍"):
         log(f"Реакция не поставлена: {e}")
 
 
-def send_telegram(token, channel_id, text):
+COMMONS_TOPICS = [
+    (("фрс",), "federal reserve building washington"),
+    (("ецб", "еврозон"), "european central bank frankfurt"),
+    (("рубль", "рубл"), "russian ruble banknotes"),
+    (("доллар",), "one dollar bill washington"),
+    (("евро",), "euro banknotes money"),
+    (("нефть", "brent", "баррел", "нефтегаз"), "oil pump jack"),
+    (("газ", "газпром"), "natural gas pipeline"),
+    (("ставк", "цб", "центробанк", "дкп", "набиуллин"), "central bank of russia building"),
+    (("инфляц", "цены", "подорожа"), "supermarket shelves groceries"),
+    (("санкц",), "european union flags brussels"),
+    (("китай", "юань"), "shanghai skyline finance"),
+    (("биржа", "акци", "фондов", "индекс", "рынок", "уолл"), "stock exchange trading floor"),
+    (("бюджет", "минфин", "налог"), "russian ruble coins"),
+    (("биткоин", "крипт"), "bitcoin cryptocurrency"),
+    (("ипотек", "квартир", "жиль"), "apartment buildings city"),
+]
+DEFAULT_IMG_QUERY = "stock market chart finance"
+_img_cache = {}
+
+
+def commons_image(query):
+    """Прямой URL тематической картинки из Wikimedia Commons (или '')."""
+    url = ("https://commons.wikimedia.org/w/api.php?action=query&generator=search"
+           "&gsrnamespace=6&gsrlimit=1&prop=imageinfo&iiprop=url&iiurlwidth=640"
+           "&format=json&gsrsearch=" + urllib.parse.quote(query))
+    try:
+        d = json.loads(http_get(url))
+        for p in d.get("query", {}).get("pages", {}).values():
+            ii = (p.get("imageinfo") or [{}])[0]
+            u = ii.get("thumburl") or ii.get("url") or ""
+            if re.search(r"\.(jpg|jpeg|png)", u, re.I):
+                return u
+    except Exception as e:
+        log(f"Commons: {e}")
+    return ""
+
+
+def topic_image(text):
+    """Тематическая картинка по теме новости (кэш на запуск)."""
+    low = (text or "").lower()
+    q = DEFAULT_IMG_QUERY
+    for keys, query in COMMONS_TOPICS:
+        if any(k in low for k in keys):
+            q = query
+            break
+    if q not in _img_cache:
+        _img_cache[q] = commons_image(q)
+    return _img_cache[q]
+
+
+def send_telegram(token, channel_id, text, preview_url=None):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
+    if preview_url:
+        lpo = {"url": preview_url, "prefer_small_media": True,
+               "show_above_text": False, "is_disabled": False}
+    else:
+        lpo = {"is_disabled": True}
     payload = urllib.parse.urlencode({
         "chat_id": channel_id,
         "text": text,
         "parse_mode": "HTML",
-        "disable_web_page_preview": "false",
+        "link_preview_options": json.dumps(lpo),
     }).encode()
     req = urllib.request.Request(url, data=payload, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=25) as r:
@@ -702,7 +765,10 @@ def run_once(cfg, dry_run=False):
                 if chart:
                     resp = send_telegram_photo(cfg["bot_token"], cfg["channel_id"], chart, text)
                 else:
-                    resp = send_telegram(cfg["bot_token"], cfg["channel_id"], text)
+                    preview = cl.get("preview_url") or topic_image(
+                        cl["best"]["title"] + " " + cl.get("ai_body", ""))
+                    resp = send_telegram(cfg["bot_token"], cfg["channel_id"], text,
+                                         preview_url=preview)
                 mid = resp.get("result", {}).get("message_id")
                 if mid:
                     seed_reaction(cfg["bot_token"], cfg["channel_id"], mid)
