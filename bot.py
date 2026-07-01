@@ -153,6 +153,18 @@ def clean_desc(text):
     return text
 
 
+def cap_text(text, max_chars=2000):
+    """Ограничить длину, сохранив абзацы и оборвав по концу предложения."""
+    text = re.sub(r"\n{3,}", "\n\n", (text or "").strip())
+    if len(text) <= max_chars:
+        return text
+    cut = text[:max_chars]
+    idx = max(cut.rfind(". "), cut.rfind(".\n"), cut.rfind("! "), cut.rfind("? "))
+    if idx > max_chars * 0.5:
+        return cut[:idx + 1].strip()
+    return cut.strip() + "…"
+
+
 def trim_sentences(text, max_sentences=22, max_chars=1125):
     """Оставляем до N предложений и не длиннее max_chars."""
     text = text.strip()
@@ -447,12 +459,19 @@ def gemini_rewrite(cfg, cluster):
             break
     lead = clean_desc(cluster.get("body", ""))[:500]
     prompt = (
-        "Ты — редактор Telegram-канала об экономике России. На основе фактов ниже "
-        "напиши короткую оригинальную новость на русском языке (3–5 предложений), "
-        "своими словами, нейтральным деловым тоном, понятную обычному читателю. "
-        "СТРОГО по фактам: не выдумывай цифры, даты, имена, события и цитаты, "
-        "которых нет в исходных данных. Без заголовка, без ссылок, без хэштегов, "
-        "без markdown — только текст новости.\n\n"
+        "Ты — экономический обозреватель Telegram-канала «Эвномия». На основе фактов "
+        "ниже напиши небольшую аналитическую заметку на русском языке "
+        "(2–3 коротких абзаца, 6–10 предложений), своими словами.\n\n"
+        "Структура:\n"
+        "1) Что произошло — по фактам источников.\n"
+        "2) Контекст и причины — почему это происходит.\n"
+        "3) Что это значит — последствия для рубля, цен, бизнеса или граждан.\n\n"
+        "Требования: нейтральный деловой тон, простой понятный язык. Конкретные "
+        "факты (цифры, даты, имена, цитаты) бери ТОЛЬКО из исходных данных — не "
+        "выдумывай их. Контекст, причины и выводы можешь строить на общей "
+        "экономической логике, но без ложных конкретных фактов. Раздели текст на "
+        "абзацы пустой строкой. Без заголовка, без ссылок, без хэштегов, без "
+        "markdown — только текст заметки.\n\n"
         f"Тема: {title}\n"
         "Сообщения источников:\n" + "\n".join(facts)
     )
@@ -464,7 +483,7 @@ def gemini_rewrite(cfg, cluster):
            f"{model}:generateContent?key={key}")
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 800,
+        "generationConfig": {"temperature": 0.5, "maxOutputTokens": 1200,
                              "thinkingConfig": {"thinkingBudget": 0}},
     }).encode("utf-8")
     req = urllib.request.Request(url, data=body,
@@ -496,13 +515,16 @@ def build_post(cluster, compact=False):
             tags.append(t)
     tags.append("#экономика")
 
-    # пояснение: лид-абзац статьи (компактнее, если пост идёт подписью к фото — лимит 1024)
-    if compact:
+    # тело: приоритет — оригинальная ИИ-заметка (с абзацами), иначе лид-абзац источника
+    ai = cluster.get("ai_body")
+    if ai:
+        body = cap_text(ai, max_chars=700 if compact else 2000)
+    elif compact:
         body = trim_sentences(clean_desc(cluster.get("body", "")), max_sentences=7, max_chars=480)
     else:
         body = trim_sentences(clean_desc(cluster.get("body", "")))
-    # не дублировать заголовок в теле
-    if body and normalize(body[:120]) and jaccard(normalize(body), normalize(title)) > 0.7:
+    # не дублировать заголовок в теле (только для пересказа из источника)
+    if not ai and body and normalize(body[:120]) and jaccard(normalize(body), normalize(title)) > 0.7:
         body = ""
 
     src_name = best.get("source_name") or "Источник"
@@ -666,7 +688,7 @@ def run_once(cfg, dry_run=False):
             continue
         ai_body = gemini_rewrite(cfg, cl)
         if ai_body:
-            cl["body"] = ai_body
+            cl["ai_body"] = ai_body
         chart = chart_for(cl)
         text = build_post(cl, compact=bool(chart))
         if dry_run:
