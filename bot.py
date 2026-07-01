@@ -697,7 +697,7 @@ def topic_image(text):
 def send_telegram(token, channel_id, text, preview_url=None):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     if preview_url:
-        lpo = {"url": preview_url, "prefer_small_media": True,
+        lpo = {"url": preview_url, "prefer_large_media": True,
                "show_above_text": False, "is_disabled": False}
     else:
         lpo = {"is_disabled": True}
