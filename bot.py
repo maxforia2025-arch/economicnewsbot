@@ -561,7 +561,8 @@ def send_telegram(token, channel_id, text):
 # Главный проход
 # ---------------------------------------------------------------------------
 
-def run_once(cfg, dry_run=False):
+def gather_clusters(cfg):
+    """Собрать все источники и сгруппировать в сюжеты."""
     kw = cfg["keywords"]
     items = []
     items += fetch_outlet_rss(cfg.get("outlet_rss_feeds", {}), kw)
@@ -569,13 +570,18 @@ def run_once(cfg, dry_run=False):
     items += fetch_gdelt(kw)
     items += fetch_telegram(cfg["telegram_channels"], kw)
     log(f"Всего собрано сообщений: {len(items)}")
-
     if not items:
-        log("Нет данных — пропуск.")
-        return
-
+        return []
     clusters = cluster_items(items)
     log(f"Сюжетов после кластеризации: {len(clusters)}")
+    return clusters
+
+
+def run_once(cfg, dry_run=False):
+    clusters = gather_clusters(cfg)
+    if not clusters:
+        log("Нет данных — пропуск.")
+        return
 
     history = load_history()
     threshold = cfg["citation_threshold"]
@@ -614,9 +620,106 @@ def run_once(cfg, dry_run=False):
     log(f"Готово. Опубликовано в этот проход: {posted}")
 
 
+# ---------------------------------------------------------------------------
+# Дайджесты (утро / вечер)
+# ---------------------------------------------------------------------------
+
+CURRENCIES = [("💵 Доллар", "R01235"), ("💶 Евро", "R01239"), ("🇨🇳 Юань", "R01375")]
+
+
+def rate_line(name, code):
+    """Строка курса с изменением за день: '💵 Доллар: 78.27 ₽ 🔺0.52'."""
+    try:
+        s = cbr_currency_series(code, days=10)
+    except Exception:
+        return None
+    if not s:
+        return None
+    val = s[-1][1]
+    arrow = ""
+    if len(s) >= 2:
+        d = round(val - s[-2][1], 2)
+        mark = "🔺" if d > 0 else "🔻" if d < 0 else "▪️"
+        arrow = f" {mark}{abs(d):.2f}"
+    return f"{name}: <b>{val:.2f} ₽</b>{arrow}"
+
+
+def key_rate():
+    """Текущая ключевая ставка ЦБ (best-effort парсинг), либо None."""
+    try:
+        page = http_get("https://www.cbr.ru/hd_base/KeyRate/")
+    except Exception:
+        return None
+    m = re.search(r"\d{2}\.\d{2}\.\d{4}\s*</td>\s*<td[^>]*>\s*(\d+,\d+)", page)
+    return m.group(1) if m else None
+
+
+def top_stories(cfg, n=3, min_cit=2):
+    clusters = gather_clusters(cfg)
+    return [c for c in clusters if c["citation"] >= min_cit][:n]
+
+
+def _story_lines(top):
+    out = []
+    for i, c in enumerate(top, 1):
+        t = html.unescape(c["best"]["title"]).strip().rstrip(".")
+        out.append(f"{i}. {html.escape(t)} <i>({c['citation']} ист.)</i>")
+    return out
+
+
+def send_digest_morning(cfg, dry_run=False):
+    top = top_stories(cfg, 3)
+    if not top:
+        log("Утренний дайджест: нет сюжетов — пропуск.")
+        return
+    lines = ["☀️ <b>Главное за ночь</b>", ""] + _story_lines(top)
+    lines += ["", "#дайджест #экономика"]
+    text = "\n".join(lines)
+    if dry_run:
+        print(text)
+    else:
+        send_telegram(cfg["bot_token"], cfg["channel_id"], text)
+        log("Утренний дайджест отправлен.")
+
+
+def send_digest_evening(cfg, dry_run=False):
+    lines = ["🌙 <b>Итоги дня</b>", "", "<b>Курсы ЦБ РФ:</b>"]
+    rates = [rate_line(n, c) for n, c in CURRENCIES]
+    lines += [r for r in rates if r]
+    kr = key_rate()
+    if kr:
+        lines += ["", f"🏦 <b>Ключевая ставка ЦБ:</b> {kr}%"]
+    top = top_stories(cfg, 3)
+    if top:
+        lines += ["", "<b>Главное за день:</b>"] + _story_lines(top)
+    lines += ["", "#итоги_дня #экономика"]
+    text = "\n".join(lines)
+    if dry_run:
+        print(text)
+    else:
+        send_telegram(cfg["bot_token"], cfg["channel_id"], text)
+        log("Вечерний дайджест отправлен.")
+
+
 def main():
     cfg = load_config()
     dry = "--dry-run" in sys.argv
+
+    # режим: env MODE (облако) или аргумент (локально): morning | evening | news
+    mode = os.environ.get("MODE", "news").lower()
+    argv = " ".join(sys.argv[1:])
+    if "morning" in argv:
+        mode = "morning"
+    elif "evening" in argv:
+        mode = "evening"
+
+    if mode == "morning":
+        send_digest_morning(cfg, dry_run=dry)
+        return
+    if mode == "evening":
+        send_digest_evening(cfg, dry_run=dry)
+        return
+
     if "--loop" in sys.argv:
         while True:
             try:

@@ -2,9 +2,16 @@ name: economicnewsrussiabot
 
 on:
   schedule:
-    # каждые 2 часа (UTC). GitHub Actions работает даже когда Mac выключен.
-    - cron: "0 */2 * * *"
-  workflow_dispatch: {}   # кнопка "Run workflow" для ручного запуска
+    - cron: "0 */2 * * *"   # новости каждые 2 часа (UTC)
+    - cron: "0 6 * * *"     # утренний дайджест 09:00 МСК
+    - cron: "0 17 * * *"    # вечерний дайджест 20:00 МСК
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Режим запуска"
+        default: news
+        type: choice
+        options: [news, morning, evening]
 
 permissions:
   contents: write          # чтобы коммитить обратно history.json (антидубль)
@@ -27,6 +34,7 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          MODE: ${{ github.event.inputs.mode || (github.event.schedule == '0 6 * * *' && 'morning') || (github.event.schedule == '0 17 * * *' && 'evening') || 'news' }}
         run: python3 bot.py
 
       - name: Commit updated history (anti-duplicate)
