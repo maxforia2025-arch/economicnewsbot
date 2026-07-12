@@ -647,21 +647,23 @@ def seed_reaction(token, channel_id, message_id, emoji="👍"):
 COMMONS_TOPICS = [
     (("фрс",), "federal reserve building washington"),
     (("ецб", "еврозон"), "european central bank frankfurt"),
-    (("рубль", "рубл"), "russian ruble banknotes"),
+    (("санкц",), "european union flags brussels"),
+    (("кита", "юан", "пекин", "шанхай"), "shanghai skyline"),
+    (("сша", "америк", "трамп", "уолл"), "wall street new york stock"),
+    (("нефт", "brent", "баррел"), "oil pump jack"),
+    (("газ ", "газпром", "газов"), "natural gas pipeline"),
+    (("ставк", "центробанк", "набиуллин", "дкп", "ключев"), "central bank of russia building moscow"),
+    (("инфляц", "подорожа", "цен на"), "supermarket shelves groceries"),
+    (("бирж", "акци", "фондов", "индекс", "мосбирж", "дивиденд"), "stock exchange trading floor"),
+    (("ипотек", "квартир", "жиль", "новостро"), "apartment buildings city"),
+    (("биткоин", "крипт", "битко"), "bitcoin cryptocurrency"),
+    (("рубл",), "russian ruble banknotes"),
     (("доллар",), "one dollar bill washington"),
     (("евро",), "euro banknotes money"),
-    (("нефть", "brent", "баррел", "нефтегаз"), "oil pump jack"),
-    (("газ", "газпром"), "natural gas pipeline"),
-    (("ставк", "цб", "центробанк", "дкп", "набиуллин"), "central bank of russia building"),
-    (("инфляц", "цены", "подорожа"), "supermarket shelves groceries"),
-    (("санкц",), "european union flags brussels"),
-    (("китай", "юань"), "shanghai skyline finance"),
-    (("биржа", "акци", "фондов", "индекс", "рынок", "уолл"), "stock exchange trading floor"),
-    (("бюджет", "минфин", "налог"), "russian ruble coins"),
-    (("биткоин", "крипт"), "bitcoin cryptocurrency"),
-    (("ипотек", "квартир", "жиль"), "apartment buildings city"),
+    (("бюджет", "минфин", "налог", "фнб"), "russian ruble coins"),
+    (("мировая эконом", "глобальн", "мвф", "g20", "g7", "oxford", "воз "), "planet earth globe"),
 ]
-DEFAULT_IMG_QUERY = "stock market chart finance"
+DEFAULT_IMG_QUERY = "stock exchange finance business"
 USED_IMAGES_PATH = os.path.join(BASE_DIR, "used_images.json")
 _candidates_cache = {}
 
@@ -787,8 +789,8 @@ def run_once(cfg, dry_run=False):
                     resp = send_telegram_photo(cfg["bot_token"], cfg["channel_id"], chart, text)
                 else:
                     # прямая картинка Wikimedia показывается надёжно (превью статьи — нет)
-                    preview = topic_image(
-                        cl["best"]["title"] + " " + cl.get("ai_body", ""), used_images)
+                    # тему берём по ЗАГОЛОВКУ (в тексте мелькают рубль/доллар и сбивают)
+                    preview = topic_image(cl["best"]["title"], used_images)
                     resp = send_telegram(cfg["bot_token"], cfg["channel_id"], text,
                                          preview_url=preview)
                 mid = resp.get("result", {}).get("message_id")
