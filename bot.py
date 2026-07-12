@@ -786,7 +786,8 @@ def run_once(cfg, dry_run=False):
                 if chart:
                     resp = send_telegram_photo(cfg["bot_token"], cfg["channel_id"], chart, text)
                 else:
-                    preview = cl.get("preview_url") or topic_image(
+                    # прямая картинка Wikimedia показывается надёжно (превью статьи — нет)
+                    preview = topic_image(
                         cl["best"]["title"] + " " + cl.get("ai_body", ""), used_images)
                     resp = send_telegram(cfg["bot_token"], cfg["channel_id"], text,
                                          preview_url=preview)
