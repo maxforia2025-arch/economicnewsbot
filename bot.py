@@ -21,6 +21,7 @@ economicnewrussiabot — автопостер новостей экономик�
 
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -661,37 +662,50 @@ COMMONS_TOPICS = [
     (("ипотек", "квартир", "жиль"), "apartment buildings city"),
 ]
 DEFAULT_IMG_QUERY = "stock market chart finance"
-_img_cache = {}
+USED_IMAGES_PATH = os.path.join(BASE_DIR, "used_images.json")
+_candidates_cache = {}
 
 
-def commons_image(query):
-    """Прямой URL тематической картинки из Wikimedia Commons (или '')."""
+def commons_images(query, limit=25):
+    """Список прямых URL тематических картинок из Wikimedia Commons."""
     url = ("https://commons.wikimedia.org/w/api.php?action=query&generator=search"
-           "&gsrnamespace=6&gsrlimit=1&prop=imageinfo&iiprop=url&iiurlwidth=640"
+           f"&gsrnamespace=6&gsrlimit={limit}&prop=imageinfo&iiprop=url&iiurlwidth=800"
            "&format=json&gsrsearch=" + urllib.parse.quote(query))
+    out = []
     try:
         d = json.loads(http_get(url))
-        for p in d.get("query", {}).get("pages", {}).values():
+        pages = d.get("query", {}).get("pages", {})
+        # сортируем по индексу поиска (релевантность)
+        for p in sorted(pages.values(), key=lambda x: x.get("index", 999)):
             ii = (p.get("imageinfo") or [{}])[0]
             u = ii.get("thumburl") or ii.get("url") or ""
-            if re.search(r"\.(jpg|jpeg|png)", u, re.I):
-                return u
+            low = u.lower()
+            bad = ("icon", "logo", "thumbnail", "map_marker", "favicon",
+                   "emblem", "diagram", "chart", "graph")
+            if re.search(r"\.(jpg|jpeg|png)", low) and not any(b in low for b in bad):
+                out.append(u)
     except Exception as e:
         log(f"Commons: {e}")
-    return ""
+    return out
 
 
-def topic_image(text):
-    """Тематическая картинка по теме новости (кэш на запуск)."""
+def topic_image(text, used):
+    """Тематическая картинка, всегда новая: ротация кандидатов, без недавних повторов."""
     low = (text or "").lower()
     q = DEFAULT_IMG_QUERY
     for keys, query in COMMONS_TOPICS:
         if any(k in low for k in keys):
             q = query
             break
-    if q not in _img_cache:
-        _img_cache[q] = commons_image(q)
-    return _img_cache[q]
+    if q not in _candidates_cache:
+        _candidates_cache[q] = commons_images(q)
+    cands = _candidates_cache[q]
+    if not cands:
+        return ""
+    fresh = [u for u in cands if u not in used]
+    pick = fresh[0] if fresh else random.choice(cands)
+    used.append(pick)
+    return pick
 
 
 def send_telegram(token, channel_id, text, preview_url=None):
@@ -742,6 +756,13 @@ def run_once(cfg, dry_run=False):
         return
 
     history = load_history()
+    used_images = []
+    if os.path.exists(USED_IMAGES_PATH):
+        try:
+            with open(USED_IMAGES_PATH, "r", encoding="utf-8") as f:
+                used_images = json.load(f)
+        except Exception:
+            used_images = []
     threshold = cfg["citation_threshold"]
     posted = 0
     for cl in clusters:
@@ -766,7 +787,7 @@ def run_once(cfg, dry_run=False):
                     resp = send_telegram_photo(cfg["bot_token"], cfg["channel_id"], chart, text)
                 else:
                     preview = cl.get("preview_url") or topic_image(
-                        cl["best"]["title"] + " " + cl.get("ai_body", ""))
+                        cl["best"]["title"] + " " + cl.get("ai_body", ""), used_images)
                     resp = send_telegram(cfg["bot_token"], cfg["channel_id"], text,
                                          preview_url=preview)
                 mid = resp.get("result", {}).get("message_id")
@@ -784,6 +805,8 @@ def run_once(cfg, dry_run=False):
 
     if not dry_run and posted:
         save_history(history)
+        with open(USED_IMAGES_PATH, "w", encoding="utf-8") as f:
+            json.dump(used_images[-120:], f, ensure_ascii=False)
     log(f"Готово. Опубликовано в этот проход: {posted}")
 
 
