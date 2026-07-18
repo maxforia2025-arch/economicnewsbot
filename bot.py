@@ -279,7 +279,11 @@ def fetch_telegram(channels, keywords):
             continue
         for block in msg_re.findall(page):
             text = html.unescape(tag_re.sub(" ", block)).strip()
-            text = re.sub(r"\s+", " ", text)
+            # чистка служебных хвостов: @упоминания, «График 👉 ссылка», короткие ссылки
+            text = re.sub(r"График\s*👉?\s*\S+", " ", text)
+            text = re.sub(r"@\w+", " ", text)
+            text = re.sub(r"\b\w+\.(ms|ly|gg)/\S+", " ", text)
+            text = re.sub(r"\s+", " ", text).strip()
             if len(text) < 25:
                 continue
             title = text[:200]
