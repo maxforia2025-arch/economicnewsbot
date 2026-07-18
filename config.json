@@ -3,6 +3,11 @@
   "channel_id": "@economicrussialetsgo",
   "gemini_model": "gemini-2.5-flash",
   "citation_threshold": 4,
+  "market_move_percent": 5,
+  "market_min_turnover": 100000000,
+  "market_index_move_percent": 2,
+  "market_cooldown_hours": 12,
+  "max_market_posts_per_run": 2,
   "max_posts_per_run": 5,
   "interval_hours": 2,
   "google_news_queries": [

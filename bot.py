@@ -812,6 +812,12 @@ def run_once(cfg, dry_run=False):
             json.dump(used_images[-120:], f, ensure_ascii=False)
     log(f"Готово. Опубликовано в этот проход: {posted}")
 
+    # значимые движения на торгах Мосбиржи (с графиком)
+    try:
+        post_market_movers(cfg, dry_run=dry_run)
+    except Exception as e:
+        log(f"Движения рынка: сбой ({e})")
+
 
 # ---------------------------------------------------------------------------
 # Дайджесты (утро / вечер)
@@ -837,26 +843,198 @@ def rate_line(name, code):
     return f"{name}: <b>{val:.2f} ₽</b>{arrow}"
 
 
+MARKET_STATE_PATH = os.path.join(BASE_DIR, "market_posted.json")
+
+
+def moex_get(url, tries=4, timeout=25):
+    """Запрос к MOEX ISS с повторами (соединение бывает нестабильным)."""
+    for _ in range(tries):
+        try:
+            return json.loads(http_get(url, timeout=timeout))
+        except Exception:
+            time.sleep(2)
+    log(f"MOEX недоступен: {url[:70]}")
+    return None
+
+
 def moex_index():
     """Индекс МосБиржи (значение, изменение %) с официального API MOEX ISS."""
-    url = ("https://iss.moex.com/iss/engines/stock/markets/index/securities/"
-           "IMOEX.json?iss.meta=off")
-    for _ in range(3):
+    d = moex_get("https://iss.moex.com/iss/engines/stock/markets/index/"
+                 "securities/IMOEX.json?iss.meta=off")
+    if not d:
+        return None
+    md = d.get("marketdata", {})
+    cols, rows = md.get("columns", []), md.get("data", [])
+    if not rows:
+        return None
+    r = dict(zip(cols, rows[0]))
+    val = r.get("CURRENTVALUE") or r.get("LASTVALUE")
+    pct = r.get("LASTCHANGEPRC")
+    if not val:
+        return None
+    return float(val), (float(pct) if pct is not None else None)
+
+
+def moex_movers(cfg):
+    """Акции с сильным движением цены за день (ликвидные)."""
+    d = moex_get("https://iss.moex.com/iss/engines/stock/markets/shares/"
+                 "boards/TQBR/securities.json?iss.meta=off")
+    if not d:
+        return []
+    sec, md = d.get("securities", {}), d.get("marketdata", {})
+    names = {}
+    scols = sec.get("columns", [])
+    for r in sec.get("data", []):
+        x = dict(zip(scols, r))
+        names[x.get("SECID")] = x.get("SHORTNAME") or x.get("SECID")
+    cols = md.get("columns", [])
+    out = []
+    for r in md.get("data", []):
+        x = dict(zip(cols, r))
+        pct, last = x.get("LASTTOPREVPRICE"), x.get("LAST")
+        turn = x.get("VALTODAY_RUR") or 0
+        if pct is None or last is None:
+            continue
+        if abs(pct) >= cfg.get("market_move_percent", 5) and \
+                turn >= cfg.get("market_min_turnover", 100000000):
+            out.append({"secid": x["SECID"], "name": names.get(x["SECID"], x["SECID"]),
+                        "last": float(last), "pct": float(pct), "turnover": float(turn)})
+    out.sort(key=lambda m: abs(m["pct"]), reverse=True)
+    return out
+
+
+def moex_candles(secid, days=30, market="shares"):
+    """Дневные закрытия для графика: [(dd.mm, close), ...]."""
+    start = (datetime.now().date() - timedelta(days=days)).isoformat()
+    d = moex_get(f"https://iss.moex.com/iss/engines/stock/markets/{market}/"
+                 f"securities/{secid}/candles.json?from={start}&interval=24&iss.meta=off")
+    if not d:
+        return []
+    c = d.get("candles", {})
+    cols, rows = c.get("columns", []), c.get("data", [])
+    out = []
+    for r in rows:
+        x = dict(zip(cols, r))
+        close = x.get("close")
+        end = str(x.get("end") or x.get("begin") or "")
+        if close is not None and len(end) >= 10:
+            out.append((end[8:10] + "." + end[5:7], float(close)))
+    return out
+
+
+def dividend_gap(secid, days=7):
+    """Если недавно прошла дивидендная отсечка — вернуть размер дивиденда."""
+    d = moex_get(f"https://iss.moex.com/iss/securities/{secid}/dividends.json"
+                 "?iss.meta=off", tries=2)
+    if not d:
+        return None
+    dv = d.get("dividends", {})
+    cols, rows = dv.get("columns", []), dv.get("data", [])
+    today = datetime.now().date()
+    for r in rows:
+        x = dict(zip(cols, r))
         try:
-            d = json.loads(http_get(url, timeout=20))
-            md = d.get("marketdata", {})
-            cols, rows = md.get("columns", []), md.get("data", [])
-            if not rows:
+            rd = datetime.strptime(str(x.get("registryclosedate")), "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if 0 <= (today - rd).days <= days:
+            try:
+                return float(x.get("value") or 0)
+            except (TypeError, ValueError):
                 return None
-            r = dict(zip(cols, rows[0]))
-            val = r.get("CURRENTVALUE") or r.get("LASTVALUE")
-            pct = r.get("LASTCHANGEPRC")
-            if val:
-                return float(val), (float(pct) if pct is not None else None)
-        except Exception as e:
-            log(f"MOEX: {e}")
-            time.sleep(2)
     return None
+
+
+def build_market_post(m, is_index=False, div=None):
+    up = m["pct"] > 0
+    head = "📈" if up else "📉"
+    word = "вырос" if up else "упал"
+    if not is_index:
+        word = "выросли" if up else "упали"
+    num = f"{m['last']:,.2f}".replace(",", " ").replace(".", ",")
+    lines = [f"{head} <b>{html.escape(m['name'])}"
+             + (f" ({m['secid']})" if not is_index else "") + "</b>", ""]
+    if is_index:
+        lines.append(f"Индекс {word} на <b>{abs(m['pct']):.2f}%</b> — {num} пунктов")
+    else:
+        lines.append(f"Акции {word} на <b>{abs(m['pct']):.2f}%</b>")
+        lines.append(f"Цена: <b>{num} ₽</b>")
+        turn = f"{int(m['turnover'] / 1000000):,}".replace(",", " ")
+        lines.append(f"Оборот за день: {turn} млн ₽")
+    if div:
+        lines += ["", f"📌 Это <b>дивидендный гэп</b>: акции упали после отсечки "
+                      f"(дивиденд {div:.2f} ₽ на бумагу), а не из-за распродажи."]
+    lines += ["", "#торги #мосбиржа" + ("" if is_index else " #акции")]
+    return "\n".join(lines)
+
+
+def post_market_movers(cfg, dry_run=False):
+    """Публикация значимых движений на торгах Мосбиржи (с графиком)."""
+    state = {}
+    if os.path.exists(MARKET_STATE_PATH):
+        try:
+            with open(MARKET_STATE_PATH, "r", encoding="utf-8") as f:
+                state = json.load(f)
+        except Exception:
+            state = {}
+    now = datetime.now(timezone.utc)
+    cooldown = cfg.get("market_cooldown_hours", 12) * 3600
+
+    candidates = []
+    # индекс МосБиржи
+    mi = moex_index()
+    if mi and mi[1] is not None and abs(mi[1]) >= cfg.get("market_index_move_percent", 2):
+        candidates.append({"secid": "IMOEX", "name": "Индекс МосБиржи",
+                           "last": mi[0], "pct": mi[1], "turnover": 0, "index": True})
+    # отдельные акции
+    for m in moex_movers(cfg):
+        m["index"] = False
+        candidates.append(m)
+
+    posted = 0
+    for m in candidates:
+        if posted >= cfg.get("max_market_posts_per_run", 2):
+            break
+        prev = state.get(m["secid"])
+        if prev:
+            try:
+                if (now - datetime.fromisoformat(prev)).total_seconds() < cooldown:
+                    continue
+            except ValueError:
+                pass
+        market = "index" if m["index"] else "shares"
+        series = moex_candles(m["secid"], market=market)
+        chart = ""
+        if len(series) >= 5:
+            unit = "пункты" if m["index"] else "₽"
+            chart = quickchart_url([d for d, _ in series], [v for _, v in series],
+                                   f"{m['name']}, 30 дней ({unit})",
+                                   "#22C55E" if m["pct"] > 0 else "#E23B2E")
+        div = None
+        if not m["index"] and m["pct"] < 0:
+            div = dividend_gap(m["secid"])
+        text = build_market_post(m, is_index=m["index"], div=div)
+        if dry_run:
+            print("-" * 50 + "\n" + re.sub(r"<[^>]+>", "", text)
+                  + f"\n[график: {'да' if chart else 'нет'}]")
+        else:
+            try:
+                if chart:
+                    send_telegram_photo(cfg["bot_token"], cfg["channel_id"], chart, text)
+                else:
+                    send_telegram(cfg["bot_token"], cfg["channel_id"], text)
+                log(f"Торги: {m['secid']} {m['pct']:+.2f}%")
+            except Exception as e:
+                log(f"Ошибка публикации {m['secid']}: {e}")
+                continue
+            state[m["secid"]] = now.isoformat()
+        posted += 1
+        time.sleep(2)
+
+    if not dry_run and posted:
+        with open(MARKET_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False)
+    log(f"Движения рынка: опубликовано {posted}")
 
 
 def key_rate():
