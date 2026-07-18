@@ -8,6 +8,13 @@
   "market_index_move_percent": 2,
   "market_cooldown_hours": 12,
   "max_market_posts_per_run": 2,
+  "known_tickers": ["SBER", "GAZP", "LKOH", "ROSN", "GMKN", "YDEX", "VTBR",
+                    "MGNT", "MTSS", "NVTK", "PLZL", "CHMF", "AFLT", "OZON",
+                    "TATN", "SNGS", "MOEX", "ALRS", "PIKK", "RTKM", "IRAO",
+                    "RUAL", "PHOR", "NLMK", "MAGN", "AFKS", "TRNFP"],
+  "volume_spike_ratio": 3,
+  "anomaly_cooldown_hours": 24,
+  "max_anomaly_posts_per_run": 2,
   "max_posts_per_run": 5,
   "interval_hours": 2,
   "google_news_queries": [

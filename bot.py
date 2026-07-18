@@ -828,6 +828,12 @@ def run_once(cfg, dry_run=False):
     except Exception as e:
         log(f"Движения рынка: сбой ({e})")
 
+    # необычные показатели известных компаний (годовой пик/дно, всплеск оборота)
+    try:
+        post_market_anomalies(cfg, dry_run=dry_run)
+    except Exception as e:
+        log(f"Аномалии компаний: сбой ({e})")
+
 
 # ---------------------------------------------------------------------------
 # Дайджесты (утро / вечер)
@@ -976,6 +982,180 @@ def build_market_post(m, is_index=False, div=None):
                       f"(дивиденд {div:.2f} ₽ на бумагу), а не из-за распродажи."]
     lines += ["", "#торги #мосбиржа" + ("" if is_index else " #акции")]
     return "\n".join(lines)
+
+
+def moex_anomalies(cfg):
+    """Необычное по известным компаниям: годовой максимум/минимум, всплеск оборота."""
+    d = moex_get("https://iss.moex.com/iss/engines/stock/markets/shares/"
+                 "boards/TQBR/securities.json?iss.meta=off")
+    if not d:
+        return []
+    sec, md = d.get("securities", {}), d.get("marketdata", {})
+    scols = sec.get("columns", [])
+    info = {}
+    for r in sec.get("data", []):
+        x = dict(zip(scols, r))
+        info[x.get("SECID")] = x
+    mcols = md.get("columns", [])
+    live = {}
+    for r in md.get("data", []):
+        x = dict(zip(mcols, r))
+        live[x.get("SECID")] = x
+
+    ratio_min = cfg.get("volume_spike_ratio", 3)
+    found = []
+    for sid in cfg.get("known_tickers", [])[:14]:
+        m = live.get(sid)
+        if not m or not m.get("LAST"):
+            continue
+        last = float(m["LAST"])
+        turn = float(m.get("VALTODAY_RUR") or 0)
+        name = (info.get(sid) or {}).get("SHORTNAME") or sid
+        hist = _ticker_history(sid)          # (дата, закрытие, оборот) за год
+        if len(hist) < 60:
+            continue
+        prev = hist[:-1]                     # без сегодняшнего дня
+        closes = [c for _, c, _ in prev if c]
+        vals = [v for _, _, v in prev if v]
+        if not closes:
+            continue
+        yhigh, ylow = max(closes), min(closes)
+        avg = sum(vals) / len(vals) if vals else 0
+        base = {"secid": sid, "name": name, "last": last, "turnover": turn,
+                "pct": float(m.get("LASTTOPREVPRICE") or 0)}
+        if last > yhigh:
+            found.append({**base, "kind": "high", "ref": yhigh})
+        elif last < ylow:
+            found.append({**base, "kind": "low", "ref": ylow})
+        elif avg and turn >= ratio_min * avg:
+            found.append({**base, "kind": "volume", "ref": avg})
+    return found
+
+
+def _ticker_history(secid, days=370):
+    """История бумаги: [(dd.mm, закрытие, дневной оборот), ...]."""
+    start = (datetime.now().date() - timedelta(days=days)).isoformat()
+    d = moex_get(f"https://iss.moex.com/iss/engines/stock/markets/shares/"
+                 f"securities/{secid}/candles.json?from={start}&interval=24&iss.meta=off",
+                 tries=2)
+    if not d:
+        return []
+    c = d.get("candles", {})
+    cols, rows = c.get("columns", []), c.get("data", [])
+    out = []
+    for r in rows:
+        x = dict(zip(cols, r))
+        close, val = x.get("close"), x.get("value")
+        end = str(x.get("end") or x.get("begin") or "")
+        if close is not None and len(end) >= 10:
+            out.append((end[8:10] + "." + end[5:7], float(close),
+                        float(val) if val else 0.0))
+    return out
+
+
+def build_anomaly_post(a):
+    num = f"{a['last']:,.2f}".replace(",", " ").replace(".", ",")
+    if a["kind"] == "high":
+        ref = f"{a['ref']:,.2f}".replace(",", " ").replace(".", ",")
+        head, body = "🚀", [
+            f"Акции обновили <b>годовой максимум</b> — {num} ₽.",
+            f"Прежний пик за год: {ref} ₽.",
+        ]
+    elif a["kind"] == "low":
+        ref = f"{a['ref']:,.2f}".replace(",", " ").replace(".", ",")
+        head, body = "🔻", [
+            f"Акции обновили <b>годовой минимум</b> — {num} ₽.",
+            f"Прежнее дно за год: {ref} ₽.",
+        ]
+    else:
+        ratio = a["turnover"] / a["ref"] if a["ref"] else 0
+        cur = f"{a['turnover'] / 1e9:.1f}".replace(".", ",")
+        avg = f"{a['ref'] / 1e9:.1f}".replace(".", ",")
+        head, body = "⚡", [
+            f"Оборот торгов <b>в {ratio:.1f} раза выше обычного</b>.",
+            f"Сегодня: {cur} млрд ₽ · в среднем за месяц: {avg} млрд ₽.",
+            f"Цена: {num} ₽.",
+        ]
+    lines = [f"{head} <b>{html.escape(a['name'])} ({a['secid']})</b>", ""] + body
+    lines += ["", "#торги #мосбиржа #акции"]
+    return "\n".join(lines)
+
+
+def post_market_anomalies(cfg, dry_run=False):
+    """Публикация необычных показателей известных компаний (с графиком)."""
+    state = _load_market_state()
+    now = datetime.now(timezone.utc)
+    cooldown = cfg.get("anomaly_cooldown_hours", 24) * 3600
+    posted = 0
+    for a in moex_anomalies(cfg):
+        if posted >= cfg.get("max_anomaly_posts_per_run", 2):
+            break
+        key = f"{a['secid']}:{a['kind']}"
+        # не дублируем компанию, уже вышедшую постом о движении цены
+        recent = False
+        for k in (key, a["secid"]):
+            prev = state.get(k)
+            if not prev:
+                continue
+            try:
+                if (now - datetime.fromisoformat(prev)).total_seconds() < cooldown:
+                    recent = True
+            except ValueError:
+                pass
+        if recent:
+            continue
+        # Годовой экстремум, вызванный резким движением сегодня (часто дивидендный
+        # гэп), — механика, а не сигнал; и он уже освещён постом о движении цены.
+        # Данные о дивидендах у MOEX запаздывают, поэтому опираемся и на величину дня.
+        if a["kind"] in ("high", "low"):
+            if abs(a.get("pct", 0)) >= cfg.get("market_move_percent", 5):
+                log(f"Аномалия {key}: пропуск — экстремум из-за движения дня "
+                    f"({a['pct']:+.1f}%)")
+                continue
+            if dividend_gap(a["secid"]):
+                log(f"Аномалия {key}: пропуск — дивидендный гэп")
+                continue
+        series = moex_candles(a["secid"], days=90)
+        chart = ""
+        if len(series) >= 5:
+            color = "#E23B2E" if a["kind"] == "low" else "#22C55E"
+            chart = quickchart_url([d for d, _ in series], [v for _, v in series],
+                                   f"{a['name']} ({a['secid']}), 90 дней, ₽", color)
+        text = build_anomaly_post(a)
+        if dry_run:
+            print("-" * 50 + "\n" + re.sub(r"<[^>]+>", "", text)
+                  + f"\n[график: {'да' if chart else 'нет'}]")
+        else:
+            try:
+                if chart:
+                    send_telegram_photo(cfg["bot_token"], cfg["channel_id"], chart, text)
+                else:
+                    send_telegram(cfg["bot_token"], cfg["channel_id"], text)
+                log(f"Аномалия: {key}")
+            except Exception as e:
+                log(f"Ошибка публикации {key}: {e}")
+                continue
+            state[key] = now.isoformat()
+        posted += 1
+        time.sleep(2)
+    if not dry_run and posted:
+        _save_market_state(state)
+    log(f"Аномалии компаний: опубликовано {posted}")
+
+
+def _load_market_state():
+    if os.path.exists(MARKET_STATE_PATH):
+        try:
+            with open(MARKET_STATE_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_market_state(state):
+    with open(MARKET_STATE_PATH, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False)
 
 
 def post_market_movers(cfg, dry_run=False):
