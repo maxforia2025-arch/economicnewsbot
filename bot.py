@@ -380,10 +380,20 @@ def save_history(history):
 
 
 def already_posted(history, tokens):
-    """Совпадает ли сюжет с чем-то опубликованным ранее."""
+    """Совпадает ли сюжет с чем-то опубликованным ранее.
+
+    Сравниваем перекрытием по меньшему множеству (containment), а не Жаккаром:
+    один и тот же сюжет назавтра собирает больше источников, объединение токенов
+    растёт — и Жаккар перестаёт узнавать дубль.
+    """
+    if not tokens:
+        return False
     for rec in history[-300:]:
         prev = set(rec.get("sig", "").split(","))
-        if jaccard(tokens, prev) >= 0.45:
+        if not prev:
+            continue
+        overlap = len(tokens & prev) / min(len(tokens), len(prev))
+        if overlap >= 0.6 or jaccard(tokens, prev) >= 0.45:
             return True
     return False
 
