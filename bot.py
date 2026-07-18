@@ -1297,6 +1297,53 @@ def send_digest_evening(cfg, dry_run=False):
         log("Вечерний дайджест отправлен.")
 
 
+# ---------------------------------------------------------------------------
+# Воскресная самореклама: 1 неделя = 1 канал из списка, по кругу
+# ---------------------------------------------------------------------------
+
+PROMO_STATE_PATH = os.path.join(BASE_DIR, "promo_state.json")
+
+
+def send_promo(cfg, dry_run=False):
+    channels = cfg.get("promo_channels", [])
+    if not channels:
+        log("Промо: список promo_channels пуст — пропуск.")
+        return
+    state = {"index": 0}
+    if os.path.exists(PROMO_STATE_PATH):
+        try:
+            with open(PROMO_STATE_PATH, "r", encoding="utf-8") as f:
+                state = json.load(f)
+        except Exception:
+            pass
+    idx = state.get("index", 0) % len(channels)
+    ch = channels[idx]
+    link = f"https://t.me/{ch['handle']}"
+    lines = [
+        "📣 <b>Канал недели от нашей команды</b>",
+        "",
+        f"⭐ <b>{html.escape(ch['title'])}</b>",
+        "",
+        html.escape(ch["pitch"]),
+        "",
+        f'👉 Подписывайся: <a href="{link}">@{ch["handle"]}</a>',
+        "",
+        "#рекомендуем",
+    ]
+    text = "\n".join(lines)
+    if dry_run:
+        print(re.sub(r"<[^>]+>", "", text))
+    else:
+        resp = send_telegram(cfg["bot_token"], cfg["channel_id"], text)
+        mid = resp.get("result", {}).get("message_id")
+        if mid:
+            seed_reaction(cfg["bot_token"], cfg["channel_id"], mid)
+        log(f"Промо опубликовано: @{ch['handle']} (index {idx})")
+        state["index"] = (idx + 1) % len(channels)
+        with open(PROMO_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False)
+
+
 def main():
     cfg = load_config()
     dry = "--dry-run" in sys.argv
@@ -1309,11 +1356,17 @@ def main():
     elif "evening" in argv:
         mode = "evening"
 
+    if "promo" in argv:
+        mode = "promo"
+
     if mode == "morning":
         send_digest_morning(cfg, dry_run=dry)
         return
     if mode == "evening":
         send_digest_evening(cfg, dry_run=dry)
+        return
+    if mode == "promo":
+        send_promo(cfg, dry_run=dry)
         return
 
     if "--loop" in sys.argv:

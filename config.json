@@ -15,6 +15,18 @@
   "volume_spike_ratio": 3,
   "anomaly_cooldown_hours": 24,
   "max_anomaly_posts_per_run": 2,
+  "promo_channels": [
+    {
+      "handle": "maxforia",
+      "title": "Maxforia",
+      "pitch": "Авторский канал проекта МАКСФОРИЯ: самое интересное из мира технологий, ИИ и не только — коротко и по делу."
+    },
+    {
+      "handle": "FLYEVER_DEALS",
+      "title": "FlyEver — дешёвые авиабилеты",
+      "pitch": "Ловим акции и ошибочные тарифы авиакомпаний по России и миру. Билеты в разы дешевле обычного — успевай забирать."
+    }
+  ],
   "max_posts_per_run": 5,
   "interval_hours": 2,
   "google_news_queries": [

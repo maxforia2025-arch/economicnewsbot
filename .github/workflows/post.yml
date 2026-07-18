@@ -5,13 +5,14 @@ on:
     - cron: "0 */2 * * *"   # новости каждые 2 часа (UTC)
     - cron: "0 6 * * *"     # утренний дайджест 09:00 МСК
     - cron: "0 17 * * *"    # вечерний дайджест 20:00 МСК
+    - cron: "0 9 * * 0"     # воскресенье 12:00 МСК — промо своих каналов
   workflow_dispatch:
     inputs:
       mode:
         description: "Режим запуска"
         default: news
         type: choice
-        options: [news, morning, evening]
+        options: [news, morning, evening, promo]
 
 permissions:
   contents: write          # чтобы коммитить обратно history.json (антидубль)
@@ -35,7 +36,7 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
           GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
-          MODE: ${{ github.event.inputs.mode || (github.event.schedule == '0 6 * * *' && 'morning') || (github.event.schedule == '0 17 * * *' && 'evening') || 'news' }}
+          MODE: ${{ github.event.inputs.mode || (github.event.schedule == '0 6 * * *' && 'morning') || (github.event.schedule == '0 17 * * *' && 'evening') || (github.event.schedule == '0 9 * * 0' && 'promo') || 'news' }}
         run: python3 bot.py
 
       - name: Commit updated history (anti-duplicate)
@@ -45,5 +46,6 @@ jobs:
           git add history.json
           [ -f used_images.json ] && git add used_images.json || true
           [ -f market_posted.json ] && git add market_posted.json || true
+          [ -f promo_state.json ] && git add promo_state.json || true
           git diff --staged --quiet || git commit -m "history: update [skip ci]"
           git push
