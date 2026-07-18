@@ -837,6 +837,28 @@ def rate_line(name, code):
     return f"{name}: <b>{val:.2f} ₽</b>{arrow}"
 
 
+def moex_index():
+    """Индекс МосБиржи (значение, изменение %) с официального API MOEX ISS."""
+    url = ("https://iss.moex.com/iss/engines/stock/markets/index/securities/"
+           "IMOEX.json?iss.meta=off")
+    for _ in range(3):
+        try:
+            d = json.loads(http_get(url, timeout=20))
+            md = d.get("marketdata", {})
+            cols, rows = md.get("columns", []), md.get("data", [])
+            if not rows:
+                return None
+            r = dict(zip(cols, rows[0]))
+            val = r.get("CURRENTVALUE") or r.get("LASTVALUE")
+            pct = r.get("LASTCHANGEPRC")
+            if val:
+                return float(val), (float(pct) if pct is not None else None)
+        except Exception as e:
+            log(f"MOEX: {e}")
+            time.sleep(2)
+    return None
+
+
 def key_rate():
     """Текущая ключевая ставка ЦБ (best-effort парсинг), либо None."""
     try:
@@ -879,6 +901,15 @@ def send_digest_evening(cfg, dry_run=False):
     lines = ["🌙 <b>Итоги дня</b>", "", "<b>Курсы ЦБ РФ:</b>"]
     rates = [rate_line(n, c) for n, c in CURRENCIES]
     lines += [r for r in rates if r]
+    mi = moex_index()
+    if mi:
+        val, pct = mi
+        num = f"{val:,.2f}".replace(",", " ").replace(".", ",")
+        line = f"📈 <b>Индекс МосБиржи:</b> {num}"
+        if pct is not None:
+            mark = "🔺" if pct > 0 else "🔻" if pct < 0 else "▪️"
+            line += f" {mark}{abs(pct):.2f}%"
+        lines += ["", line]
     kr = key_rate()
     if kr:
         lines += ["", f"🏦 <b>Ключевая ставка ЦБ:</b> {kr}%"]
