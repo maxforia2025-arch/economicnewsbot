@@ -866,6 +866,11 @@ def rate_line(name, code):
 MARKET_STATE_PATH = os.path.join(BASE_DIR, "market_posted.json")
 
 
+def is_sunday_msk():
+    """Воскресенье по Москве (UTC+3): биржа закрыта, данные торгов не актуальны."""
+    return (datetime.now(timezone.utc) + timedelta(hours=3)).weekday() == 6
+
+
 def moex_get(url, tries=4, timeout=25):
     """Запрос к MOEX ISS с повторами (соединение бывает нестабильным)."""
     for _ in range(tries):
@@ -1087,6 +1092,9 @@ def build_anomaly_post(a):
 
 def post_market_anomalies(cfg, dry_run=False):
     """Публикация необычных показателей известных компаний (с графиком)."""
+    if is_sunday_msk():
+        log("Аномалии компаний: воскресенье — пропуск (торгов нет).")
+        return
     state = _load_market_state()
     now = datetime.now(timezone.utc)
     cooldown = cfg.get("anomaly_cooldown_hours", 24) * 3600
@@ -1164,6 +1172,9 @@ def _save_market_state(state):
 
 def post_market_movers(cfg, dry_run=False):
     """Публикация значимых движений на торгах Мосбиржи (с графиком)."""
+    if is_sunday_msk():
+        log("Движения рынка: воскресенье — пропуск (торгов нет).")
+        return
     state = {}
     if os.path.exists(MARKET_STATE_PATH):
         try:
@@ -1273,7 +1284,7 @@ def send_digest_evening(cfg, dry_run=False):
     lines = ["🌙 <b>Итоги дня</b>", "", "<b>Курсы ЦБ РФ:</b>"]
     rates = [rate_line(n, c) for n, c in CURRENCIES]
     lines += [r for r in rates if r]
-    mi = moex_index()
+    mi = None if is_sunday_msk() else moex_index()
     if mi:
         val, pct = mi
         num = f"{val:,.2f}".replace(",", " ").replace(".", ",")
